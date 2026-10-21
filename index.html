@@ -1,0 +1,1196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perplexity API Console</title>
+  
+  <!-- Modern Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Markdown Parser and Syntax Highlighting -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+
+  <style>
+    :root {
+      --bg-primary: #0a0d12;
+      --bg-secondary: #111620;
+      --bg-tertiary: #182030;
+      --bg-glass: rgba(17, 22, 32, 0.75);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-active: rgba(32, 184, 205, 0.5);
+      
+      --accent: #20b8cd;
+      --accent-hover: #26d2ea;
+      --accent-glow: rgba(32, 184, 205, 0.25);
+      --accent-dim: rgba(32, 184, 205, 0.12);
+
+      --text-main: #f0f4f8;
+      --text-muted: #8b99ad;
+      --text-dim: #5c687a;
+
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --success: #10b981;
+      
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-full: 9999px;
+      
+      --shadow-subtle: 0 4px 20px rgba(0, 0, 0, 0.35);
+      --shadow-glow: 0 0 25px var(--accent-glow);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 10%, rgba(32, 184, 205, 0.07) 0%, transparent 40%),
+        radial-gradient(circle at 85% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 40%);
+    }
+
+    /* Header */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(16px);
+      background-color: var(--bg-glass);
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.85rem 1.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #1c7c8c, var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: var(--shadow-glow);
+    }
+
+    .brand-icon svg {
+      width: 20px;
+      height: 20px;
+      fill: #ffffff;
+    }
+
+    .brand-text h1 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(90deg, #ffffff, #c2d6e4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-text span {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Controls Bar */
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .api-url-wrapper {
+      display: flex;
+      align-items: center;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-full);
+      padding: 0.25rem 0.6rem 0.25rem 0.85rem;
+      gap: 0.5rem;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .api-url-wrapper:focus-within {
+      border-color: var(--border-active);
+      box-shadow: 0 0 0 2px var(--accent-dim);
+    }
+
+    .api-url-label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .api-url-input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      width: 230px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.35rem 0.8rem;
+      border-radius: var(--radius-full);
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .status-badge:hover {
+      border-color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--text-dim);
+    }
+
+    .status-dot.online {
+      background-color: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .status-dot.warning {
+      background-color: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+      animation: pulse 1.5s infinite;
+    }
+
+    .status-dot.offline {
+      background-color: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+    }
+
+    .btn-icon {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 0.4rem 0.75rem;
+      border-radius: var(--radius-full);
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .btn-icon:hover {
+      color: var(--text-main);
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 9rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* Active Session Bar */
+    .session-card {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-glass);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 0.6rem 1rem;
+      font-size: 0.8rem;
+    }
+
+    .session-info {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .session-label {
+      color: var(--text-dim);
+    }
+
+    .session-id {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+    }
+
+    .session-actions a {
+      color: var(--text-muted);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: color 0.2s;
+    }
+
+    .session-actions a:hover {
+      color: var(--accent);
+    }
+
+    /* Welcome / Hero State */
+    .hero-container {
+      text-align: center;
+      padding: 3rem 1rem 1.5rem 1rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .hero-title {
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+    }
+
+    .hero-subtitle {
+      font-size: 1rem;
+      color: var(--text-muted);
+      max-width: 540px;
+      line-height: 1.6;
+    }
+
+    .starter-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      justify-content: center;
+      margin-top: 1rem;
+      max-width: 700px;
+    }
+
+    .starter-chip {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 0.5rem 0.9rem;
+      border-radius: var(--radius-full);
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+    }
+
+    .starter-chip:hover {
+      border-color: var(--accent);
+      color: var(--text-main);
+      background: var(--accent-dim);
+      transform: translateY(-1px);
+    }
+
+    /* Messages Stream */
+    .messages-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .message-row {
+      display: flex;
+      gap: 1rem;
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .avatar.assistant-avatar {
+      background: linear-gradient(135deg, #165b66, var(--accent));
+      color: white;
+    }
+
+    .avatar.user-avatar {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+    }
+
+    .bubble {
+      max-width: 82%;
+      padding: 1rem 1.25rem;
+      border-radius: var(--radius-md);
+      line-height: 1.65;
+      font-size: 0.95rem;
+      position: relative;
+    }
+
+    .message-row.user .bubble {
+      background: linear-gradient(135deg, #173b4d, #142838);
+      border: 1px solid rgba(32, 184, 205, 0.3);
+      color: #ffffff;
+      border-top-right-radius: 4px;
+    }
+
+    .message-row.assistant .bubble {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-top-left-radius: 4px;
+      color: var(--text-main);
+      width: 100%;
+    }
+
+    .bubble-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.85rem;
+      padding-top: 0.6rem;
+      border-top: 1px solid var(--border-color);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .meta-actions {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .meta-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.75rem;
+      transition: color 0.15s;
+    }
+
+    .meta-btn:hover {
+      color: var(--accent);
+    }
+
+    /* Markdown Styling in Responses */
+    .prose h1, .prose h2, .prose h3 {
+      margin: 1.2rem 0 0.6rem 0;
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .prose h1 { font-size: 1.35rem; }
+    .prose h2 { font-size: 1.15rem; }
+    .prose h3 { font-size: 1.02rem; }
+
+    .prose p {
+      margin-bottom: 0.85rem;
+    }
+
+    .prose p:last-child {
+      margin-bottom: 0;
+    }
+
+    .prose ul, .prose ol {
+      margin: 0.5rem 0 0.85rem 1.4rem;
+    }
+
+    .prose li {
+      margin-bottom: 0.35rem;
+    }
+
+    .prose pre {
+      background: #080b0f !important;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 0.9rem;
+      margin: 0.85rem 0;
+      overflow-x: auto;
+    }
+
+    .prose code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+    }
+
+    .prose :not(pre) > code {
+      background: var(--bg-tertiary);
+      color: #38bdf8;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }
+
+    .prose blockquote {
+      border-left: 3px solid var(--accent);
+      padding-left: 0.85rem;
+      color: var(--text-muted);
+      margin: 0.75rem 0;
+    }
+
+    /* Loading Pulse */
+    .thinking-bubble {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .thinking-dots {
+      display: flex;
+      gap: 0.3rem;
+    }
+
+    .thinking-dots span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+
+    .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
+    .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+    /* Sticky Bottom Input Area */
+    .input-dock {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(to top, var(--bg-primary) 70%, transparent);
+      padding: 1.5rem 1.25rem;
+      z-index: 40;
+    }
+
+    .input-box {
+      max-width: 960px;
+      margin: 0 auto;
+      background: var(--bg-glass);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 0.6rem 0.85rem;
+      box-shadow: var(--shadow-subtle);
+      transition: border-color 0.2s, box-shadow 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .input-box:focus-within {
+      border-color: var(--border-active);
+      box-shadow: 0 0 20px rgba(32, 184, 205, 0.15);
+    }
+
+    .input-textarea {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      resize: none;
+      max-height: 160px;
+      min-height: 44px;
+      padding: 0.35rem 0.25rem;
+    }
+
+    .input-textarea::placeholder {
+      color: var(--text-dim);
+    }
+
+    .input-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 0.35rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .input-modes {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .mode-pill {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: var(--radius-full);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .mode-pill.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, #1c7c8c, var(--accent));
+      color: #ffffff;
+      border: none;
+      border-radius: var(--radius-full);
+      padding: 0.55rem 1.15rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      cursor: pointer;
+      box-shadow: 0 2px 10px var(--accent-glow);
+      transition: all 0.2s;
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: linear-gradient(135deg, #208e9f, var(--accent-hover));
+      transform: translateY(-1px);
+    }
+
+    .send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* Screenshot Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      max-width: 900px;
+      width: 100%;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .modal-header {
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .modal-body {
+      padding: 1rem;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 380px;
+      max-height: 70vh;
+      overflow: auto;
+    }
+
+    .modal-body img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+
+    /* Keyframes */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.9); }
+    }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 640px) {
+      header {
+        padding: 0.75rem 1rem;
+      }
+      .api-url-input {
+        width: 140px;
+      }
+      .bubble {
+        max-width: 92%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- App Header -->
+  <header>
+    <div class="brand" onclick="startNewSession()">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>PerplexAPI Studio</h1>
+        <span>FastAPI + Chromium Engine</span>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <!-- Base URL Config -->
+      <div class="api-url-wrapper" title="Change target backend API URL">
+        <span class="api-url-label">API:</span>
+        <input type="text" id="apiUrlInput" class="api-url-input" value="http://127.0.0.1:8000" spellcheck="false">
+      </div>
+
+      <!-- Health Status Badge -->
+      <div class="status-badge" id="statusBadge" onclick="checkHealth()" title="Click to refresh server health status">
+        <div class="status-dot warning" id="statusDot"></div>
+        <span id="statusText">Checking...</span>
+      </div>
+
+      <!-- Live Browser Screenshot Button -->
+      <button class="btn-icon" id="openScreenshotBtn" onclick="toggleScreenshotModal(true)" title="View live Chromium browser display">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+        <span>Preview Screen</span>
+      </button>
+
+      <!-- New Chat Button -->
+      <button class="btn-icon" onclick="startNewSession()" title="Start a fresh search thread">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        <span>New Thread</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content Stream -->
+  <main>
+    <!-- Active Session Card -->
+    <div class="session-card" id="sessionCard">
+      <div class="session-info">
+        <span class="session-label">Active Thread:</span>
+        <span class="session-id" id="activeChatId">None</span>
+      </div>
+      <div class="session-actions">
+        <a id="activeChatUrl" href="#" target="_blank" rel="noopener noreferrer">
+          <span>Open on Perplexity.ai</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+
+    <!-- Hero / Empty State -->
+    <div class="hero-container" id="heroContainer">
+      <h2 class="hero-title">Perplexity AI Direct Interface</h2>
+      <p class="hero-subtitle">
+        Powered by your local or Render-hosted FastAPI service. Query live web knowledge with citation stripping and conversation memory.
+      </p>
+
+      <div class="starter-chips">
+        <div class="starter-chip" onclick="applyPrompt('Explain quantum computing in simple terms with a real-world analogy')">
+          ⚛️ Quantum computing explained
+        </div>
+        <div class="starter-chip" onclick="applyPrompt('What are the most notable tech developments of this week?')">
+          📰 Recent tech developments
+        </div>
+        <div class="starter-chip" onclick="applyPrompt('Compare FastAPI vs Next.js backend for AI microservices')">
+          ⚡ FastAPI vs Next.js for AI
+        </div>
+        <div class="starter-chip" onclick="applyPrompt('Write a clean Python script using async Playwright to extract page titles')">
+          🐍 Python Playwright snippet
+        </div>
+      </div>
+    </div>
+
+    <!-- Messages List -->
+    <div class="messages-container" id="messagesContainer"></div>
+  </main>
+
+  <!-- Floating Input Dock -->
+  <div class="input-dock">
+    <div class="input-box">
+      <textarea 
+        id="promptInput" 
+        class="input-textarea" 
+        placeholder="Ask anything... (Press Enter to send, Shift+Enter for new line)" 
+        rows="1"
+      ></textarea>
+
+      <div class="input-footer">
+        <div class="input-modes">
+          <button 
+            type="button" 
+            class="mode-pill active" 
+            id="modeContinueBtn" 
+            onclick="setMode('continue')" 
+            title="Maintain continuous memory in the active search thread"
+          >
+            <span>💬 Continue Thread</span>
+          </button>
+          <button 
+            type="button" 
+            class="mode-pill" 
+            id="modeNewBtn" 
+            onclick="setMode('new')" 
+            title="Start a brand new search session on Perplexity"
+          >
+            <span>✨ Fresh Search</span>
+          </button>
+        </div>
+
+        <button class="send-btn" id="sendBtn" onclick="submitPrompt()">
+          <span id="sendBtnText">Ask</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Realtime Browser Screen Modal -->
+  <div class="modal-overlay" id="screenshotModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span>Chromium Live View (`/debug/screenshot`)</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-icon" onclick="refreshScreenshot()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+          <button class="btn-icon" onclick="toggleScreenshotModal(false)">✕ Close</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <img id="screenshotImage" src="" alt="Chromium Screen Preview">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let currentChatId = null;
+    let currentChatUrl = null;
+    let isRequestInProgress = false;
+    let sendMode = 'continue'; // 'continue' | 'new'
+
+    const apiUrlInput = document.getElementById('apiUrlInput');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const promptInput = document.getElementById('promptInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const sendBtnText = document.getElementById('sendBtnText');
+    const messagesContainer = document.getElementById('messagesContainer');
+    const heroContainer = document.getElementById('heroContainer');
+    const sessionCard = document.getElementById('sessionCard');
+    const activeChatId = document.getElementById('activeChatId');
+    const activeChatUrl = document.getElementById('activeChatUrl');
+    const modeContinueBtn = document.getElementById('modeContinueBtn');
+    const modeNewBtn = document.getElementById('modeNewBtn');
+    const screenshotModal = document.getElementById('screenshotModal');
+    const screenshotImage = document.getElementById('screenshotImage');
+
+    function getBaseUrl() {
+      return apiUrlInput.value.trim().replace(/\/+$/, '');
+    }
+
+    // Auto-resize input
+    promptInput.addEventListener('input', () => {
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+    });
+
+    // Enter to submit
+    promptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitPrompt();
+      }
+    });
+
+    // Mode Selector
+    function setMode(mode) {
+      sendMode = mode;
+      if (mode === 'continue') {
+        modeContinueBtn.classList.add('active');
+        modeNewBtn.classList.remove('active');
+      } else {
+        modeNewBtn.classList.add('active');
+        modeContinueBtn.classList.remove('active');
+      }
+    }
+
+    function applyPrompt(text) {
+      promptInput.value = text;
+      promptInput.focus();
+      promptInput.dispatchEvent(new Event('input'));
+    }
+
+    function startNewSession() {
+      currentChatId = null;
+      currentChatUrl = null;
+      sessionCard.style.display = 'none';
+      setMode('new');
+      promptInput.focus();
+    }
+
+    // Server Health Check
+    async function checkHealth() {
+      const base = getBaseUrl();
+      statusDot.className = 'status-dot warning';
+      statusText.textContent = 'Checking...';
+
+      try {
+        const res = await fetch(`${base}/`, { method: 'GET', signal: AbortSignal.timeout(6000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        if (data.status === 'ready') {
+          statusDot.className = 'status-dot online';
+          statusText.textContent = 'Engine Ready';
+          if (data.current_chat_id && !currentChatId) {
+            updateSessionInfo(data.current_chat_id, data.current_chat_url);
+          }
+        } else {
+          statusDot.className = 'status-dot warning';
+          statusText.textContent = data.current_step || 'Initializing';
+        }
+      } catch (err) {
+        statusDot.className = 'status-dot offline';
+        statusText.textContent = 'Offline / Error';
+      }
+    }
+
+    function updateSessionInfo(id, url) {
+      currentChatId = id;
+      currentChatUrl = url;
+      if (id) {
+        activeChatId.textContent = id.substring(0, 8) + '...';
+        activeChatUrl.href = url || `https://www.perplexity.ai/search/${id}`;
+        sessionCard.style.display = 'flex';
+      }
+    }
+
+    // Submit Prompt
+    async function submitPrompt() {
+      const prompt = promptInput.value.trim();
+      if (!prompt || isRequestInProgress) return;
+
+      const base = getBaseUrl();
+      isRequestInProgress = true;
+      sendBtn.disabled = true;
+      sendBtnText.textContent = 'Thinking...';
+      heroContainer.style.display = 'none';
+
+      // Append user bubble
+      appendUserMessage(prompt);
+      promptInput.value = '';
+      promptInput.style.height = 'auto';
+
+      // Append thinking bubble
+      const thinkingEl = appendThinkingMessage();
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+
+      const isNewChat = (sendMode === 'new' || !currentChatId);
+      const endpoint = isNewChat ? `${base}/chat/new` : `${base}/chat`;
+      const payload = isNewChat 
+        ? { prompt } 
+        : { prompt, chat_id: currentChatId };
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || `Server returned ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        thinkingEl.remove();
+
+        // Update active thread
+        if (data.chat_id) {
+          updateSessionInfo(data.chat_id, data.chat_url);
+          setMode('continue'); // Switch to continuing this thread
+        }
+
+        appendAssistantMessage(data.response, data.chat_url);
+
+      } catch (error) {
+        thinkingEl.remove();
+        appendErrorMessage(error.message);
+      } finally {
+        isRequestInProgress = false;
+        sendBtn.disabled = false;
+        sendBtnText.textContent = 'Ask';
+        promptInput.focus();
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      }
+    }
+
+    // DOM Message Renderers
+    function appendUserMessage(text) {
+      const row = document.createElement('div');
+      row.className = 'message-row user';
+      row.innerHTML = `
+        <div class="bubble">
+          <div>${escapeHtml(text)}</div>
+        </div>
+        <div class="avatar user-avatar">You</div>
+      `;
+      messagesContainer.appendChild(row);
+    }
+
+    function appendThinkingMessage() {
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+      row.innerHTML = `
+        <div class="avatar assistant-avatar">P</div>
+        <div class="bubble">
+          <div class="thinking-bubble">
+            <span>Perplexity is searching and thinking</span>
+            <div class="thinking-dots">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(row);
+      return row;
+    }
+
+    function appendAssistantMessage(markdownText, threadUrl) {
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+
+      // Parse markdown using marked.js
+      const rawHtml = marked.parse(markdownText || '*(No response received)*');
+
+      row.innerHTML = `
+        <div class="avatar assistant-avatar">P</div>
+        <div class="bubble">
+          <div class="prose">${rawHtml}</div>
+          <div class="bubble-meta">
+            <span>Perplexity Cleaned Output</span>
+            <div class="meta-actions">
+              <button class="meta-btn" onclick="copyMessage(this)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                <span>Copy</span>
+              </button>
+              ${threadUrl ? `
+                <a class="meta-btn" href="${threadUrl}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                    <polyline points="15 3 21 3 21 9"/>
+                    <line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                  <span>Source</span>
+                </a>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Syntax highlight code blocks
+      row.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block);
+      });
+
+      messagesContainer.appendChild(row);
+    }
+
+    function appendErrorMessage(errText) {
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+      row.innerHTML = `
+        <div class="avatar assistant-avatar" style="background:#ef4444;">!</div>
+        <div class="bubble" style="border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.08);">
+          <strong style="color: #ef4444;">API Request Failed:</strong>
+          <p style="margin-top: 0.4rem; color: #fca5a5; font-size: 0.88rem;">${escapeHtml(errText)}</p>
+          <div style="margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-dim);">
+            Verify that your backend FastAPI server is running (`uvicorn app:app --port 8000`) and the API URL is reachable.
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(row);
+    }
+
+    function copyMessage(btn) {
+      const bubble = btn.closest('.bubble');
+      const prose = bubble.querySelector('.prose');
+      if (prose) {
+        navigator.clipboard.writeText(prose.innerText).then(() => {
+          const original = btn.innerHTML;
+          btn.innerHTML = `<span>Copied!</span>`;
+          setTimeout(() => { btn.innerHTML = original; }, 1500);
+        });
+      }
+    }
+
+    function escapeHtml(string) {
+      return String(string).replace(/[&<>"']/g, function (s) {
+        return ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        })[s];
+      });
+    }
+
+    // Chromium Preview Modal
+    function toggleScreenshotModal(open) {
+      if (open) {
+        screenshotModal.classList.add('open');
+        refreshScreenshot();
+      } else {
+        screenshotModal.classList.remove('open');
+      }
+    }
+
+    function refreshScreenshot() {
+      const base = getBaseUrl();
+      screenshotImage.src = `${base}/debug/screenshot?t=${Date.now()}`;
+    }
+
+    // Modal background click closes
+    screenshotModal.addEventListener('click', (e) => {
+      if (e.target === screenshotModal) toggleScreenshotModal(false);
+    });
+
+    // Check health on load
+    checkHealth();
+  </script>
+</body>
+</html>

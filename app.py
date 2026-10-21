@@ -9,9 +9,13 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from playwright.async_api import async_playwright
+
+try:
+    from patchright.async_api import async_playwright
+except ImportError:
+    from playwright.async_api import async_playwright
 
 app_state = {
     "playwright": None,
@@ -23,6 +27,8 @@ app_state = {
     "init_task": None,
     "step": "not_started",
 }
+
+INPUT_SELECTOR = "#ask-input, textarea[placeholder*='Ask'], textarea[placeholder*='Search'], textarea"
 
 def format_cookie(c):
     cookie = {
@@ -61,6 +67,116 @@ async def dismiss_cookie_banner(page):
             await asyncio.sleep(0.3)
     except Exception:
         pass
+
+async def is_cloudflare_challenge(page) -> bool:
+    try:
+        title = (await page.title()).lower()
+        if "just a moment" in title or "attention required" in title:
+            return True
+        if await page.locator("iframe[src*='challenges.cloudflare.com']").count() > 0:
+            return True
+        body = await page.locator("body").inner_text()
+        body_lower = body.lower()
+        if (
+            "performing security verification" in body_lower
+            or "verify you are human" in body_lower
+            or "verify you are not a bot" in body_lower
+        ):
+            return True
+    except Exception:
+        pass
+    return False
+
+async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
+    if not await is_cloudflare_challenge(page):
+        return True
+
+    title = await page.title()
+    print(f"[Cloudflare] Turnstile challenge detected (Title: '{title}'). Attempting automatic bypass...")
+    app_state["step"] = "resolving_cloudflare_challenge"
+    start_time = time.time()
+    last_click_time = 0
+
+    while time.time() - start_time < timeout:
+        current_title = await page.title()
+        current_title_lower = current_title.lower()
+
+        # Check if challenge cleared
+        if "just a moment" not in current_title_lower and "attention required" not in current_title_lower:
+            input_count = await page.locator(INPUT_SELECTOR).count()
+            if input_count > 0 or "perplexity" in current_title_lower:
+                print(f"[Cloudflare] Security verification passed! Page title: '{current_title}'")
+                return True
+
+        now = time.time()
+        # Attempt interaction every 3.5 seconds
+        if now - last_click_time >= 3.5:
+            clicked = False
+            # Method 1: Check frames for checkbox or interactive elements
+            for frame in page.frames:
+                if "challenges.cloudflare.com" in frame.url:
+                    for sel in ["input[type='checkbox']", ".cb-i", "label", "#challenge-stage"]:
+                        try:
+                            cb = frame.locator(sel).first
+                            if await cb.count() > 0 and await cb.is_visible():
+                                box = await cb.bounding_box()
+                                if box:
+                                    await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=5)
+                                    await asyncio.sleep(0.2)
+                                    await cb.click(force=True)
+                                    print(f"[Cloudflare] Clicked challenge checkbox inside Turnstile frame ('{sel}').")
+                                    clicked = True
+                                    last_click_time = now
+                                    break
+                        except Exception:
+                            pass
+                    if clicked:
+                        break
+
+            # Method 2: If frame interaction didn't trigger, click coordinates on the Turnstile iframe
+            if not clicked:
+                try:
+                    iframe = page.locator("iframe[src*='challenges.cloudflare.com']").first
+                    if await iframe.count() > 0 and await iframe.is_visible():
+                        box = await iframe.bounding_box()
+                        if box and box["width"] > 0 and box["height"] > 0:
+                            click_x = box["x"] + min(28, box["width"] * 0.15)
+                            click_y = box["y"] + (box["height"] / 2)
+                            await page.mouse.move(click_x, click_y, steps=5)
+                            await asyncio.sleep(0.2)
+                            await page.mouse.click(click_x, click_y)
+                            print(f"[Cloudflare] Clicked Turnstile widget coordinates ({int(click_x)}, {int(click_y)}).")
+                            last_click_time = now
+                except Exception:
+                    pass
+
+        # If stuck on challenge for >25s, try reloading page once
+        elapsed = time.time() - start_time
+        if 25 <= elapsed <= 28:
+            print("[Cloudflare] Turnstile still pending after 25s, reloading page...")
+            try:
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
+            except Exception:
+                pass
+
+        await asyncio.sleep(1.0)
+
+    final_title = await page.title()
+    if "just a moment" not in final_title.lower():
+        return True
+
+    print(f"[Cloudflare] Timed out waiting for Cloudflare challenge to resolve after {timeout}s.")
+    return False
+
+async def wait_for_perplexity_input(page, timeout: int = 45000):
+    if await is_cloudflare_challenge(page):
+        await resolve_cloudflare_challenge(page, timeout=int(timeout / 1000))
+
+    input_el = page.locator(INPUT_SELECTOR).first
+    await input_el.wait_for(state="visible", timeout=timeout)
+    await dismiss_cookie_banner(page)
+    return input_el
 
 async def wait_for_response_completion(response_element) -> str:
     printed_len = 0
@@ -105,8 +221,7 @@ async def send_prompt_on_page(page, prompt_text: str) -> dict:
     await dismiss_cookie_banner(page)
     prior_count = await page.locator(".prose").count()
 
-    input_el = page.locator("#ask-input").first
-    await input_el.wait_for(state="visible", timeout=30000)
+    input_el = await wait_for_perplexity_input(page, timeout=30000)
     await input_el.click()
     await page.keyboard.type(prompt_text, delay=10)
     await asyncio.sleep(0.3)
@@ -168,22 +283,54 @@ async def initialize_browser():
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
+            "--disable-infobars",
+            "--lang=en-US,en",
         ]
         if sys.platform.startswith("win"):
             launch_args.append("--window-position=-20000,-20000")
 
-        print("[Startup] Launching Chromium engine...")
+        proxy_url = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        proxy_config = {"server": proxy_url} if proxy_url else None
+        if proxy_config:
+            print(f"[Startup] Using proxy configuration: {proxy_url}")
+
+        print("[Startup] Launching Chromium engine (with Patchright stealth)...")
         p = await async_playwright().start()
         browser = await p.chromium.launch(
             headless=False,
             args=launch_args,
+            proxy=proxy_config,
         )
 
         app_state["step"] = "creating_context"
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            locale="en-US",
+            timezone_id="America/New_York",
         )
+
+        # Inject stealth scripts to eliminate navigator.webdriver and match expected browser properties
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            if (!window.chrome) {
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+            }
+        """)
+
         await context.add_cookies(cookies)
 
         page = await context.new_page()
@@ -199,8 +346,7 @@ async def initialize_browser():
         app_state["step"] = "waiting_for_ask_input"
         print(f"[Startup] Loaded page title: {await page.title()}, URL: {page.url}")
 
-        await page.wait_for_selector("#ask-input", timeout=45000)
-        await dismiss_cookie_banner(page)
+        await wait_for_perplexity_input(page, timeout=45000)
 
         app_state["step"] = "ready"
         app_state["initialized"] = True
@@ -258,7 +404,7 @@ class PromptRequest(BaseModel):
 class NewChatRequest(BaseModel):
     prompt: str
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     page = app_state.get("page")
     current_url = page.url if page else None
@@ -270,12 +416,22 @@ async def root():
         "current_chat_url": current_url,
         "current_chat_id": extract_chat_id(current_url) if current_url else None,
         "endpoints": {
+            "GET /console": "Interactive Web Console UI",
             "POST /chat": "Continue in the active thread or specific chat_id (retains conversational context)",
             "POST /chat/new": "Open a fresh search session and send the first prompt",
             "GET /chat/status": "Check active conversation ID and URL",
             "GET /debug/screenshot": "View real-time screenshot of the browser window",
         },
     }
+
+@app.get("/console", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+async def serve_console():
+    index_file = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.exists(index_file):
+        with open(index_file, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Console index.html not found</h1>", status_code=404)
 
 @app.get("/debug/screenshot")
 async def debug_screenshot():
@@ -306,7 +462,7 @@ async def chat_continue(req: PromptRequest):
             target_url = f"https://www.perplexity.ai/search/{req.chat_id}"
             if page.url != target_url:
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_selector("#ask-input", timeout=30000)
+                await wait_for_perplexity_input(page, timeout=30000)
 
         try:
             result = await send_prompt_on_page(page, req.prompt)
@@ -324,7 +480,7 @@ async def chat_new(req: NewChatRequest):
 
     async with lock:
         await page.goto("https://www.perplexity.ai/", wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_selector("#ask-input", timeout=30000)
+        await wait_for_perplexity_input(page, timeout=30000)
 
         try:
             result = await send_prompt_on_page(page, req.prompt)

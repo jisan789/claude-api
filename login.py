@@ -1,7 +1,11 @@
 import json
 import os
 import sys
-from playwright.sync_api import sync_playwright
+try:
+    from patchright.sync_api import sync_playwright
+except ImportError:
+    from playwright.sync_api import sync_playwright
+
 
 def format_cookie(c):
     cookie = {
@@ -63,7 +67,7 @@ def main():
 
         try:
             page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_selector("#ask-input", timeout=30000)
+            page.wait_for_selector("#ask-input, textarea", timeout=45000)
             print("Successfully loaded Perplexity! Logged-in session is active.")
             print("Chromium window is active. Close the browser window to exit.")
             page.wait_for_close(timeout=0)

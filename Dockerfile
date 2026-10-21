@@ -14,7 +14,7 @@ ENV DISPLAY=:99
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
+RUN patchright install chromium || playwright install chromium
 
 COPY . .
 

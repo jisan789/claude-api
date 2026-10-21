@@ -3,7 +3,13 @@ import json
 import os
 import sys
 import time
-from playwright.sync_api import sync_playwright
+
+try:
+    from patchright.sync_api import sync_playwright
+except ImportError:
+    from playwright.sync_api import sync_playwright
+
+INPUT_SELECTOR = "#ask-input, textarea[placeholder*='Ask'], textarea[placeholder*='Search'], textarea"
 
 def format_cookie(c):
     cookie = {
@@ -37,9 +43,112 @@ def dismiss_cookie_banner(page):
     except Exception:
         pass
 
+def is_cloudflare_challenge(page) -> bool:
+    try:
+        title = page.title().lower()
+        if "just a moment" in title or "attention required" in title:
+            return True
+        if page.locator("iframe[src*='challenges.cloudflare.com']").count() > 0:
+            return True
+        body = page.locator("body").inner_text().lower()
+        if (
+            "performing security verification" in body
+            or "verify you are human" in body
+            or "verify you are not a bot" in body
+        ):
+            return True
+    except Exception:
+        pass
+    return False
+
+def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
+    if not is_cloudflare_challenge(page):
+        return True
+
+    title = page.title()
+    print(f"[Cloudflare] Turnstile challenge detected (Title: '{title}'). Attempting automatic bypass...")
+    start_time = time.time()
+    last_click_time = 0
+
+    while time.time() - start_time < timeout:
+        current_title = page.title()
+        current_title_lower = current_title.lower()
+
+        if "just a moment" not in current_title_lower and "attention required" not in current_title_lower:
+            input_count = page.locator(INPUT_SELECTOR).count()
+            if input_count > 0 or "perplexity" in current_title_lower:
+                print(f"[Cloudflare] Security verification passed! Page title: '{current_title}'")
+                return True
+
+        now = time.time()
+        if now - last_click_time >= 3.5:
+            clicked = False
+            for frame in page.frames:
+                if "challenges.cloudflare.com" in frame.url:
+                    for sel in ["input[type='checkbox']", ".cb-i", "label", "#challenge-stage"]:
+                        try:
+                            cb = frame.locator(sel).first
+                            if cb.count() > 0 and cb.is_visible():
+                                box = cb.bounding_box()
+                                if box:
+                                    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=5)
+                                    time.sleep(0.2)
+                                    cb.click(force=True)
+                                    print(f"[Cloudflare] Clicked challenge checkbox inside Turnstile frame ('{sel}').")
+                                    clicked = True
+                                    last_click_time = now
+                                    break
+                        except Exception:
+                            pass
+                    if clicked:
+                        break
+
+            if not clicked:
+                try:
+                    iframe = page.locator("iframe[src*='challenges.cloudflare.com']").first
+                    if iframe.count() > 0 and iframe.is_visible():
+                        box = iframe.bounding_box()
+                        if box and box["width"] > 0 and box["height"] > 0:
+                            click_x = box["x"] + min(28, box["width"] * 0.15)
+                            click_y = box["y"] + (box["height"] / 2)
+                            page.mouse.move(click_x, click_y, steps=5)
+                            time.sleep(0.2)
+                            page.mouse.click(click_x, click_y)
+                            print(f"[Cloudflare] Clicked Turnstile widget coordinates ({int(click_x)}, {int(click_y)}).")
+                            last_click_time = now
+                except Exception:
+                    pass
+
+        elapsed = time.time() - start_time
+        if 25 <= elapsed <= 28:
+            print("[Cloudflare] Turnstile still pending after 25s, reloading page...")
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                time.sleep(3)
+            except Exception:
+                pass
+
+        time.sleep(1.0)
+
+    final_title = page.title()
+    if "just a moment" not in final_title.lower():
+        return True
+
+    print(f"[Cloudflare] Timed out waiting for Cloudflare challenge to resolve after {timeout}s.")
+    return False
+
+def wait_for_perplexity_input(page, timeout: int = 45000):
+    if is_cloudflare_challenge(page):
+        resolve_cloudflare_challenge(page, timeout=int(timeout / 1000))
+
+    input_el = page.locator(INPUT_SELECTOR).first
+    input_el.wait_for(state="visible", timeout=timeout)
+    dismiss_cookie_banner(page)
+    return input_el
+
 def send_prompt_and_get_reply(page, prompt_text):
     """
-    Submits prompt_text to Perplexity (#ask-input) and streams response in real-time.
+    Submits prompt_text to Perplexity and streams response in real-time.
     """
     print(f"\n[You]: {prompt_text}")
 
@@ -49,8 +158,7 @@ def send_prompt_and_get_reply(page, prompt_text):
     prior_count = page.locator(".prose").count()
 
     # 2. Locate input box
-    input_el = page.locator("#ask-input").first
-    input_el.wait_for(state="visible", timeout=30000)
+    input_el = wait_for_perplexity_input(page, timeout=30000)
 
     # 3. Focus and type prompt
     input_el.click()
@@ -124,23 +232,59 @@ def run_perplexity_bot(invisible=True, initial_prompt=None):
 
     playwright_cookies = [format_cookie(c) for c in raw_cookies]
 
-    launch_args = ["--disable-blink-features=AutomationControlled"]
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-infobars",
+        "--lang=en-US,en",
+    ]
     if invisible:
         print("Starting in background (invisible mode - no browser window)...")
         launch_args.append("--window-position=-20000,-20000")
     else:
         print("Starting with visible browser window...")
 
+    proxy_url = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    proxy_config = {"server": proxy_url} if proxy_url else None
+    if proxy_config:
+        print(f"Using proxy: {proxy_url}")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
             args=launch_args,
+            proxy=proxy_config,
         )
 
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            locale="en-US",
+            timezone_id="America/New_York",
         )
+
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            if (!window.chrome) {
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+            }
+        """)
 
         context.add_cookies(playwright_cookies)
 
@@ -148,9 +292,8 @@ def run_perplexity_bot(invisible=True, initial_prompt=None):
         print("Connecting to https://www.perplexity.ai/ ...")
         page.goto("https://www.perplexity.ai/", wait_until="domcontentloaded", timeout=60000)
 
-        # Wait for chat input
-        page.wait_for_selector("#ask-input", timeout=45000)
-        dismiss_cookie_banner(page)
+        # Wait for chat input (resolving any Cloudflare challenge)
+        wait_for_perplexity_input(page, timeout=45000)
         print("Connected & Logged in successfully!")
 
         # Single prompt execution
