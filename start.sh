@@ -1,16 +1,20 @@
 #!/bin/bash
 set -e
 
-# Ensure X11 socket directory exists
+# Ensure X11 directory exists
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 
-# Clean up any stale X locks
-rm -f /tmp/.X*-lock /tmp/.X11-unix/* 2>/dev/null || true
+# Clean up any previous lock files
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 
-# Determine port (Render supplies $PORT, default to 10000)
+# Start Xvfb virtual display in the background on :99
+echo "Starting Xvfb virtual display on :99..."
+Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp &
+export DISPLAY=:99
+
 SERVER_PORT="${PORT:-10000}"
-echo "Starting server on port ${SERVER_PORT}..."
+echo "Binding Uvicorn to 0.0.0.0:${SERVER_PORT}..."
 
-# Start with Xvfb virtual display
-exec xvfb-run -a --server-args="-screen 0 1280x800x24 -ac -nolisten tcp -dpi 96 +extension RANDR" uvicorn app:app --host 0.0.0.0 --port "${SERVER_PORT}"
+# Exec directly into uvicorn so signals pass through cleanly
+exec uvicorn app:app --host 0.0.0.0 --port "${SERVER_PORT}"
