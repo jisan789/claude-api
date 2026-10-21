@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.64.0-noble
 
 WORKDIR /app
 
@@ -9,12 +9,12 @@ RUN apt-get update && apt-get install -y \
     dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
 
-# Ensure Python outputs logs immediately without buffering
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install chromium
 
 COPY . .
 
