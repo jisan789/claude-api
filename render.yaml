@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: claude-api
+    runtime: docker
+    plan: starter
+    region: oregon
+    envVars:
+      - key: CLAUDE_COOKIES
+        sync: false
