@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: claude-api
+    name: perplexity-api
     runtime: docker
     plan: starter
     region: oregon
     envVars:
-      - key: CLAUDE_COOKIES
+      - key: PERPLEXITY_COOKIES
         sync: false

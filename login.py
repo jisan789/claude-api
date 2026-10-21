@@ -13,7 +13,6 @@ def format_cookie(c):
         "secure": c.get("secure", False),
     }
 
-    # Playwright requires sameSite to be "Strict", "Lax", or "None"
     same_site = c.get("sameSite", "").lower()
     if same_site in ("no_restriction", "none"):
         cookie["sameSite"] = "None"
@@ -22,7 +21,6 @@ def format_cookie(c):
     elif same_site == "strict":
         cookie["sameSite"] = "Strict"
 
-    # Playwright accepts 'expires' in seconds as float or integer
     if not c.get("session") and "expirationDate" in c and c["expirationDate"]:
         cookie["expires"] = float(c["expirationDate"])
 
@@ -40,10 +38,9 @@ def main():
     playwright_cookies = [format_cookie(c) for c in raw_cookies]
 
     print(f"Loaded {len(playwright_cookies)} cookies.")
-    print("Launching Chromium...")
+    print("Launching Chromium browser...")
 
     with sync_playwright() as p:
-        # Launch Chromium browser with UI (headless=False)
         browser = p.chromium.launch(
             headless=False,
             args=[
@@ -57,19 +54,18 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         )
 
-        # Inject cookies
         context.add_cookies(playwright_cookies)
         print("Cookies successfully added to browser context.")
 
         page = context.new_page()
-        target_url = "https://claude.ai/new"
+        target_url = "https://www.perplexity.ai/"
         print(f"Navigating to {target_url} ...")
-        
+
         try:
             page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-            print("Successfully loaded page!")
-            print("Chromium window is active. Close the browser window to exit the script.")
-            # Keep browser alive until user closes it
+            page.wait_for_selector("#ask-input", timeout=30000)
+            print("Successfully loaded Perplexity! Logged-in session is active.")
+            print("Chromium window is active. Close the browser window to exit.")
             page.wait_for_close(timeout=0)
         except KeyboardInterrupt:
             print("\nExiting on user interrupt...")

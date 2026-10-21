@@ -48,64 +48,82 @@ def format_cookie(c):
     return cookie
 
 def extract_chat_id(url: str) -> Optional[str]:
-    match = re.search(r"/chat/([a-f0-9\-]+)", url)
+    if not url:
+        return None
+    match = re.search(r"/search/([a-f0-9\-]+)", url)
     return match.group(1) if match else None
 
-async def wait_for_response_completion(new_assistant_row) -> str:
+async def dismiss_cookie_banner(page):
+    try:
+        got_it = page.locator('button:has-text("Got it")')
+        if await got_it.count() > 0 and await got_it.first.is_visible():
+            await got_it.first.click()
+            await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
+async def wait_for_response_completion(response_element) -> str:
     printed_len = 0
     stable_cycles = 0
     full_text = ""
+    last_text = ""
     max_wait = 180
     start_time = time.time()
 
     while time.time() - start_time < max_wait:
-        reply_el = new_assistant_row.locator('[data-perf-reply-text]').or_(
-            new_assistant_row.locator('.standard-markdown')
-        )
+        try:
+            current_text = await response_element.evaluate("""el => {
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll('.citation, [data-pplx-citation]').forEach(e => e.remove());
+                return clone.innerText.trim();
+            }""")
+        except Exception:
+            current_text = ""
 
-        if await reply_el.count() > 0:
-            current_text = await reply_el.inner_text()
+        if current_text:
             if len(current_text) > printed_len:
                 full_text = current_text
                 printed_len = len(current_text)
                 stable_cycles = 0
-
-        streaming_attr = await new_assistant_row.get_attribute("data-perf-row-streaming")
-        has_copy_btn = (await new_assistant_row.locator('button[aria-label="Copy"]').count()) > 0
-
-        if streaming_attr == "false" and has_copy_btn and printed_len > 0:
-            stable_cycles += 1
-            if stable_cycles >= 2:
-                return full_text
-        else:
-            stable_cycles = 0
+                last_text = current_text
+            elif current_text == last_text and printed_len > 0:
+                stable_cycles += 1
+                # Stable for ~1.6s
+                if stable_cycles >= 4:
+                    return full_text
+            else:
+                stable_cycles = 0
+                last_text = current_text
 
         await asyncio.sleep(0.4)
 
     if full_text:
         return full_text
-    raise TimeoutError("Timed out waiting for Claude response to complete.")
+    raise TimeoutError("Timed out waiting for Perplexity response to complete.")
 
 async def send_prompt_on_page(page, prompt_text: str) -> dict:
-    prior_count = await page.locator('div[data-perf-row="assistant"]').count()
+    await dismiss_cookie_banner(page)
+    prior_count = await page.locator(".prose").count()
 
-    input_el = page.locator('[data-testid="chat-input"]').first
+    input_el = page.locator("#ask-input").first
     await input_el.wait_for(state="visible", timeout=30000)
     await input_el.click()
-    await page.keyboard.type(prompt_text, delay=15)
+    await page.keyboard.type(prompt_text, delay=10)
     await asyncio.sleep(0.3)
 
-    send_btn = page.locator('button[data-testid="chat-input-send"]')
-    await send_btn.wait_for(state="visible", timeout=10000)
-    await send_btn.click()
+    submit_btn = page.locator('button[aria-label="Submit"]')
+    if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
+        await submit_btn.first.click()
+    else:
+        await page.keyboard.press("Enter")
 
     wait_start = time.time()
-    while await page.locator('div[data-perf-row="assistant"]').count() <= prior_count:
-        if time.time() - wait_start > 30:
-            raise TimeoutError("Claude did not begin generating a response within 30 seconds.")
+    while await page.locator(".prose").count() <= prior_count:
+        if time.time() - wait_start > 35:
+            raise TimeoutError("Perplexity did not begin generating a response within 35 seconds.")
         await asyncio.sleep(0.3)
 
-    new_row = page.locator('div[data-perf-row="assistant"]').nth(prior_count)
+    new_row = page.locator(".prose").nth(prior_count)
     reply_text = await wait_for_response_completion(new_row)
 
     current_url = page.url
@@ -123,7 +141,11 @@ async def initialize_browser():
 
     try:
         app_state["step"] = "reading_cookies"
-        raw_cookies_env = os.getenv("CLAUDE_COOKIES")
+        raw_cookies_env = (
+            os.getenv("PERPLEXITY_COOKIES")
+            or os.getenv("PPLX_COOKIES")
+            or os.getenv("CLAUDE_COOKIES")
+        )
         if raw_cookies_env:
             raw_cookies = json.loads(raw_cookies_env)
         else:
@@ -132,7 +154,7 @@ async def initialize_browser():
                 with open(cookie_file, "r", encoding="utf-8") as f:
                     raw_cookies = json.load(f)
             else:
-                app_state["init_error"] = "CLAUDE_COOKIES environment variable not set in Render Dashboard."
+                app_state["init_error"] = "PERPLEXITY_COOKIES environment variable not set in Render Dashboard."
                 app_state["step"] = "error_missing_cookies"
                 print(f"[Notice] {app_state['init_error']}")
                 return
@@ -170,20 +192,20 @@ async def initialize_browser():
         app_state["playwright"] = p
         app_state["lock"] = asyncio.Lock()
 
-        app_state["step"] = "navigating_to_claude"
-        print("[Startup] Navigating to https://claude.ai/new ...")
-        await page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=60000)
+        app_state["step"] = "navigating_to_perplexity"
+        print("[Startup] Navigating to https://www.perplexity.ai/ ...")
+        await page.goto("https://www.perplexity.ai/", wait_until="domcontentloaded", timeout=60000)
 
-        app_state["step"] = "waiting_for_chat_input"
+        app_state["step"] = "waiting_for_ask_input"
         print(f"[Startup] Loaded page title: {await page.title()}, URL: {page.url}")
-        
-        # Check if chat input is available
-        await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=45000)
-        
+
+        await page.wait_for_selector("#ask-input", timeout=45000)
+        await dismiss_cookie_banner(page)
+
         app_state["step"] = "ready"
         app_state["initialized"] = True
         app_state["init_error"] = None
-        print("[Startup] Claude API Service is ready and authenticated!")
+        print("[Startup] Perplexity API Service is ready and authenticated!")
 
     except Exception as e:
         app_state["init_error"] = str(e)
@@ -203,7 +225,7 @@ async def ensure_ready():
 
     if not app_state["initialized"]:
         err = app_state.get("init_error") or f"Service at step '{app_state.get('step')}'"
-        raise HTTPException(status_code=503, detail=f"Claude service not ready: {err}")
+        raise HTTPException(status_code=503, detail=f"Perplexity service not ready: {err}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -215,8 +237,8 @@ async def lifespan(app: FastAPI):
         await app_state["playwright"].stop()
 
 app = FastAPI(
-    title="Claude.ai Unofficial API",
-    description="FastAPI service for Claude.ai with conversation persistence and new chat endpoints.",
+    title="Perplexity.ai Unofficial API",
+    description="FastAPI service for Perplexity.ai with conversation persistence and new search/chat endpoints.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -243,14 +265,14 @@ async def root():
     return {
         "status": "ready" if app_state["initialized"] else "initializing",
         "current_step": app_state["step"],
-        "service": "Claude.ai API",
+        "service": "Perplexity.ai API",
         "init_error": app_state["init_error"],
         "current_chat_url": current_url,
         "current_chat_id": extract_chat_id(current_url) if current_url else None,
         "endpoints": {
-            "POST /chat": "Continue in the same active chat (maintains conversation context)",
-            "POST /chat/new": "Open a fresh new chat session and send the first prompt",
-            "GET /chat/status": "Check active conversation ID and status",
+            "POST /chat": "Continue in the active thread or specific chat_id (retains conversational context)",
+            "POST /chat/new": "Open a fresh search session and send the first prompt",
+            "GET /chat/status": "Check active conversation ID and URL",
             "GET /debug/screenshot": "View real-time screenshot of the browser window",
         },
     }
@@ -281,10 +303,10 @@ async def chat_continue(req: PromptRequest):
 
     async with lock:
         if req.chat_id:
-            target_url = f"https://claude.ai/chat/{req.chat_id}"
+            target_url = f"https://www.perplexity.ai/search/{req.chat_id}"
             if page.url != target_url:
                 await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-                await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=30000)
+                await page.wait_for_selector("#ask-input", timeout=30000)
 
         try:
             result = await send_prompt_on_page(page, req.prompt)
@@ -301,8 +323,8 @@ async def chat_new(req: NewChatRequest):
     lock = app_state.get("lock")
 
     async with lock:
-        await page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=60000)
-        await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=30000)
+        await page.goto("https://www.perplexity.ai/", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_selector("#ask-input", timeout=30000)
 
         try:
             result = await send_prompt_on_page(page, req.prompt)
