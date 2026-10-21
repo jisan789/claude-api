@@ -9,6 +9,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
@@ -20,6 +21,7 @@ app_state = {
     "initialized": False,
     "init_error": None,
     "init_task": None,
+    "step": "not_started",
 }
 
 def format_cookie(c):
@@ -116,11 +118,11 @@ async def send_prompt_on_page(page, prompt_text: str) -> dict:
     }
 
 async def initialize_browser():
-    """Initializes the browser and loads cookies."""
     if app_state["initialized"]:
         return
 
     try:
+        app_state["step"] = "reading_cookies"
         raw_cookies_env = os.getenv("CLAUDE_COOKIES")
         if raw_cookies_env:
             raw_cookies = json.loads(raw_cookies_env)
@@ -131,11 +133,13 @@ async def initialize_browser():
                     raw_cookies = json.load(f)
             else:
                 app_state["init_error"] = "CLAUDE_COOKIES environment variable not set in Render Dashboard."
+                app_state["step"] = "error_missing_cookies"
                 print(f"[Notice] {app_state['init_error']}")
                 return
 
         cookies = [format_cookie(c) for c in raw_cookies]
 
+        app_state["step"] = "launching_chromium"
         launch_args = [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
@@ -153,6 +157,7 @@ async def initialize_browser():
             args=launch_args,
         )
 
+        app_state["step"] = "creating_context"
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
@@ -160,27 +165,35 @@ async def initialize_browser():
         await context.add_cookies(cookies)
 
         page = await context.new_page()
+        app_state["page"] = page
+        app_state["browser"] = browser
+        app_state["playwright"] = p
+        app_state["lock"] = asyncio.Lock()
+
+        app_state["step"] = "navigating_to_claude"
         print("[Startup] Navigating to https://claude.ai/new ...")
         await page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=60000)
-        await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=45000)
-        print("[Startup] Claude API Service is ready and authenticated!")
 
-        app_state["playwright"] = p
-        app_state["browser"] = browser
-        app_state["page"] = page
-        app_state["lock"] = asyncio.Lock()
+        app_state["step"] = "waiting_for_chat_input"
+        print(f"[Startup] Loaded page title: {await page.title()}, URL: {page.url}")
+        
+        # Check if chat input is available
+        await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=45000)
+        
+        app_state["step"] = "ready"
         app_state["initialized"] = True
         app_state["init_error"] = None
+        print("[Startup] Claude API Service is ready and authenticated!")
+
     except Exception as e:
         app_state["init_error"] = str(e)
-        print(f"[Error] Browser initialization failed: {e}")
+        app_state["step"] = f"error: {e}"
+        print(f"[Error] Browser initialization failed at step {app_state['step']}: {e}")
 
 async def ensure_ready():
-    """Wait for background initialization to finish or attempt it now."""
     if app_state["initialized"]:
         return
 
-    # If already running initialization task in background, await it
     task = app_state.get("init_task")
     if task and not task.done():
         await task
@@ -189,19 +202,14 @@ async def ensure_ready():
         await initialize_browser()
 
     if not app_state["initialized"]:
-        err = app_state.get("init_error") or "Service not initialized."
+        err = app_state.get("init_error") or f"Service at step '{app_state.get('step')}'"
         raise HTTPException(status_code=503, detail=f"Claude service not ready: {err}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Launch browser initialization as a BACKGROUND task so FastAPI opens the port immediately!
     app_state["init_task"] = asyncio.create_task(initialize_browser())
-    print("[Startup] FastAPI bound port immediately. Background browser initializing...")
-
     yield
-
     if app_state.get("browser"):
-        print("Shutting down Chromium...")
         await app_state["browser"].close()
     if app_state.get("playwright"):
         await app_state["playwright"].stop()
@@ -234,6 +242,7 @@ async def root():
     current_url = page.url if page else None
     return {
         "status": "ready" if app_state["initialized"] else "initializing",
+        "current_step": app_state["step"],
         "service": "Claude.ai API",
         "init_error": app_state["init_error"],
         "current_chat_url": current_url,
@@ -242,8 +251,18 @@ async def root():
             "POST /chat": "Continue in the same active chat (maintains conversation context)",
             "POST /chat/new": "Open a fresh new chat session and send the first prompt",
             "GET /chat/status": "Check active conversation ID and status",
+            "GET /debug/screenshot": "View real-time screenshot of the browser window",
         },
     }
+
+@app.get("/debug/screenshot")
+async def debug_screenshot():
+    """Returns a real-time PNG screenshot of what the browser currently sees on Render."""
+    page = app_state.get("page")
+    if not page:
+        raise HTTPException(status_code=400, detail="Page not initialized yet")
+    screenshot_bytes = await page.screenshot()
+    return Response(content=screenshot_bytes, media_type="image/png")
 
 @app.get("/chat/status")
 async def chat_status():
