@@ -87,7 +87,7 @@ async def is_cloudflare_challenge(page) -> bool:
         pass
     return False
 
-async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
+async def resolve_cloudflare_challenge(page, timeout: int = 90) -> bool:
     if not await is_cloudflare_challenge(page):
         return True
 
@@ -108,23 +108,44 @@ async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
                 print(f"[Cloudflare] Security verification passed! Page title: '{current_title}'")
                 return True
 
+        # Check if turnstile response token was populated
+        try:
+            has_token = await page.evaluate("""() => {
+                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                return input && input.value && input.value.length > 0;
+            }""")
+            if has_token:
+                print("[Cloudflare] Turnstile token acquired! Submitting challenge form...")
+                await page.evaluate("""() => {
+                    const form = document.querySelector('#challenge-form') || document.querySelector('form');
+                    if (form) form.submit();
+                }""")
+                await asyncio.sleep(2)
+        except Exception:
+            pass
+
         now = time.time()
         # Attempt interaction every 3.5 seconds
         if now - last_click_time >= 3.5:
             clicked = False
+
             # Method 1: Check frames for checkbox or interactive elements
             for frame in page.frames:
                 if "challenges.cloudflare.com" in frame.url:
-                    for sel in ["input[type='checkbox']", ".cb-i", "label", "#challenge-stage"]:
+                    for sel in ["input[type='checkbox']", "label", ".cb-i", "#challenge-stage"]:
                         try:
                             cb = frame.locator(sel).first
                             if await cb.count() > 0 and await cb.is_visible():
                                 box = await cb.bounding_box()
                                 if box:
-                                    await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=5)
-                                    await asyncio.sleep(0.2)
-                                    await cb.click(force=True)
-                                    print(f"[Cloudflare] Clicked challenge checkbox inside Turnstile frame ('{sel}').")
+                                    cx = box["x"] + box["width"] / 2
+                                    cy = box["y"] + box["height"] / 2
+                                    await page.mouse.move(cx, cy, steps=8)
+                                    await asyncio.sleep(0.15)
+                                    await page.mouse.down()
+                                    await asyncio.sleep(0.08)
+                                    await page.mouse.up()
+                                    print(f"[Cloudflare] Clicked checkbox inside Turnstile frame ('{sel}').")
                                     clicked = True
                                     last_click_time = now
                                     break
@@ -133,7 +154,29 @@ async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
                     if clicked:
                         break
 
-            # Method 2: If frame interaction didn't trigger, click coordinates on the Turnstile iframe
+            # Method 2: Click outer Turnstile container if frame interaction didn't trigger
+            if not clicked:
+                for sel in ["div.cf-turnstile", "#challenge-stage", "#turnstile-wrapper"]:
+                    try:
+                        el = page.locator(sel).first
+                        if await el.count() > 0 and await el.is_visible():
+                            box = await el.bounding_box()
+                            if box and box["width"] > 0 and box["height"] > 0:
+                                cx = box["x"] + min(30, box["width"] * 0.15)
+                                cy = box["y"] + (box["height"] / 2)
+                                await page.mouse.move(cx, cy, steps=8)
+                                await asyncio.sleep(0.15)
+                                await page.mouse.down()
+                                await asyncio.sleep(0.08)
+                                await page.mouse.up()
+                                print(f"[Cloudflare] Clicked container '{sel}' at ({int(cx)}, {int(cy)}).")
+                                clicked = True
+                                last_click_time = now
+                                break
+                    except Exception:
+                        pass
+
+            # Method 3: Click widget coordinates on the iframe itself
             if not clicked:
                 try:
                     iframe = page.locator("iframe[src*='challenges.cloudflare.com']").first
@@ -142,18 +185,20 @@ async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
                         if box and box["width"] > 0 and box["height"] > 0:
                             click_x = box["x"] + min(28, box["width"] * 0.15)
                             click_y = box["y"] + (box["height"] / 2)
-                            await page.mouse.move(click_x, click_y, steps=5)
-                            await asyncio.sleep(0.2)
-                            await page.mouse.click(click_x, click_y)
+                            await page.mouse.move(click_x, click_y, steps=8)
+                            await asyncio.sleep(0.15)
+                            await page.mouse.down()
+                            await asyncio.sleep(0.08)
+                            await page.mouse.up()
                             print(f"[Cloudflare] Clicked Turnstile widget coordinates ({int(click_x)}, {int(click_y)}).")
                             last_click_time = now
                 except Exception:
                     pass
 
-        # If stuck on challenge for >25s, try reloading page once
+        # If stuck on challenge for >40s, try reloading page once
         elapsed = time.time() - start_time
-        if 25 <= elapsed <= 28:
-            print("[Cloudflare] Turnstile still pending after 25s, reloading page...")
+        if 40 <= elapsed <= 43:
+            print("[Cloudflare] Turnstile still pending after 40s, reloading page...")
             try:
                 await page.reload(wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(3)
@@ -169,7 +214,7 @@ async def resolve_cloudflare_challenge(page, timeout: int = 60) -> bool:
     print(f"[Cloudflare] Timed out waiting for Cloudflare challenge to resolve after {timeout}s.")
     return False
 
-async def wait_for_perplexity_input(page, timeout: int = 45000):
+async def wait_for_perplexity_input(page, timeout: int = 90000):
     if await is_cloudflare_challenge(page):
         await resolve_cloudflare_challenge(page, timeout=int(timeout / 1000))
 
@@ -282,9 +327,17 @@ async def initialize_browser():
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
-            "--disable-gpu",
             "--disable-infobars",
             "--lang=en-US,en",
+            "--js-flags=--max-old-space-size=256",
+            "--renderer-process-limit=2",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--disable-translate",
+            "--no-first-run",
+            "--mute-audio",
         ]
         if sys.platform.startswith("win"):
             launch_args.append("--window-position=-20000,-20000")
@@ -310,10 +363,22 @@ async def initialize_browser():
             timezone_id="America/New_York",
         )
 
-        # Inject stealth scripts to eliminate navigator.webdriver and match expected browser properties
+        # Inject comprehensive stealth scripts matching the Windows Chrome profile
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
+            });
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'Win32'
+            });
+            Object.defineProperty(navigator, 'vendor', {
+                get: () => 'Google Inc.'
+            });
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 4
+            });
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8
             });
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1, 2, 3, 4, 5]
@@ -321,6 +386,11 @@ async def initialize_browser():
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['en-US', 'en']
             });
+            if (navigator.userAgentData) {
+                Object.defineProperty(navigator.userAgentData, 'platform', {
+                    get: () => 'Windows'
+                });
+            }
             if (!window.chrome) {
                 window.chrome = {
                     runtime: {},
@@ -346,7 +416,7 @@ async def initialize_browser():
         app_state["step"] = "waiting_for_ask_input"
         print(f"[Startup] Loaded page title: {await page.title()}, URL: {page.url}")
 
-        await wait_for_perplexity_input(page, timeout=45000)
+        await wait_for_perplexity_input(page, timeout=90000)
 
         app_state["step"] = "ready"
         app_state["initialized"] = True
@@ -404,7 +474,8 @@ class PromptRequest(BaseModel):
 class NewChatRequest(BaseModel):
     prompt: str
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/", operation_id="root_get")
+@app.head("/", operation_id="root_head")
 async def root():
     page = app_state.get("page")
     current_url = page.url if page else None

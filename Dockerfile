@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     x11-utils \
     xauth \
     dbus-x11 \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1
@@ -22,4 +23,5 @@ RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
 
 EXPOSE 10000
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["./start.sh"]

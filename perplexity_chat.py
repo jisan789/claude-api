@@ -237,9 +237,17 @@ def run_perplexity_bot(invisible=True, initial_prompt=None):
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
         "--disable-infobars",
         "--lang=en-US,en",
+        "--js-flags=--max-old-space-size=256",
+        "--renderer-process-limit=2",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--no-first-run",
+        "--mute-audio",
     ]
     if invisible:
         print("Starting in background (invisible mode - no browser window)...")
@@ -270,12 +278,29 @@ def run_perplexity_bot(invisible=True, initial_prompt=None):
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'Win32'
+            });
+            Object.defineProperty(navigator, 'vendor', {
+                get: () => 'Google Inc.'
+            });
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 4
+            });
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8
+            });
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1, 2, 3, 4, 5]
             });
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['en-US', 'en']
             });
+            if (navigator.userAgentData) {
+                Object.defineProperty(navigator.userAgentData, 'platform', {
+                    get: () => 'Windows'
+                });
+            }
             if (!window.chrome) {
                 window.chrome = {
                     runtime: {},

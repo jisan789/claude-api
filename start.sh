@@ -10,7 +10,7 @@ rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 
 # Start Xvfb virtual display in the background on :99
 echo "Starting Xvfb virtual display on :99..."
-Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp &
+Xvfb :99 -screen 0 1280x800x16 +extension RANDR +extension GLX -ac -nolisten tcp &
 export DISPLAY=:99
 
 SERVER_PORT="${PORT:-10000}"
