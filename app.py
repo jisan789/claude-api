@@ -19,6 +19,7 @@ app_state = {
     "lock": None,
     "initialized": False,
     "init_error": None,
+    "init_task": None,
 }
 
 def format_cookie(c):
@@ -115,80 +116,94 @@ async def send_prompt_on_page(page, prompt_text: str) -> dict:
     }
 
 async def initialize_browser():
-    """Initializes the browser and loads cookies if not already done."""
+    """Initializes the browser and loads cookies."""
     if app_state["initialized"]:
         return
 
-    # Check for cookies in ENV or file
-    raw_cookies_env = os.getenv("CLAUDE_COOKIES")
-    if raw_cookies_env:
-        try:
+    try:
+        raw_cookies_env = os.getenv("CLAUDE_COOKIES")
+        if raw_cookies_env:
             raw_cookies = json.loads(raw_cookies_env)
-        except Exception as e:
-            app_state["init_error"] = f"Failed to parse CLAUDE_COOKIES JSON: {e}"
-            raise RuntimeError(app_state["init_error"])
-    else:
-        cookie_file = os.path.join(os.path.dirname(__file__), "cookies.json")
-        if os.path.exists(cookie_file):
-            with open(cookie_file, "r", encoding="utf-8") as f:
-                raw_cookies = json.load(f)
         else:
-            app_state["init_error"] = "CLAUDE_COOKIES environment variable is not set. Please set it in your Render Dashboard."
-            raise RuntimeError(app_state["init_error"])
+            cookie_file = os.path.join(os.path.dirname(__file__), "cookies.json")
+            if os.path.exists(cookie_file):
+                with open(cookie_file, "r", encoding="utf-8") as f:
+                    raw_cookies = json.load(f)
+            else:
+                app_state["init_error"] = "CLAUDE_COOKIES environment variable not set in Render Dashboard."
+                print(f"[Notice] {app_state['init_error']}")
+                return
 
-    cookies = [format_cookie(c) for c in raw_cookies]
+        cookies = [format_cookie(c) for c in raw_cookies]
 
-    launch_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-    ]
-    if sys.platform.startswith("win"):
-        launch_args.append("--window-position=-20000,-20000")
+        launch_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+        ]
+        if sys.platform.startswith("win"):
+            launch_args.append("--window-position=-20000,-20000")
 
-    print("Launching Chromium engine...")
-    p = await async_playwright().start()
-    browser = await p.chromium.launch(
-        headless=False,
-        args=launch_args,
-    )
+        print("[Startup] Launching Chromium engine...")
+        p = await async_playwright().start()
+        browser = await p.chromium.launch(
+            headless=False,
+            args=launch_args,
+        )
 
-    context = await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-    )
-    await context.add_cookies(cookies)
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        )
+        await context.add_cookies(cookies)
 
-    page = await context.new_page()
-    print("Navigating to https://claude.ai/new ...")
-    await page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=60000)
-    await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=45000)
-    print("Claude API Service is live and authenticated!")
+        page = await context.new_page()
+        print("[Startup] Navigating to https://claude.ai/new ...")
+        await page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=60000)
+        await page.locator('[data-testid="chat-input"]').first.wait_for(state="visible", timeout=45000)
+        print("[Startup] Claude API Service is ready and authenticated!")
 
-    app_state["playwright"] = p
-    app_state["browser"] = browser
-    app_state["page"] = page
-    app_state["lock"] = asyncio.Lock()
-    app_state["initialized"] = True
-    app_state["init_error"] = None
+        app_state["playwright"] = p
+        app_state["browser"] = browser
+        app_state["page"] = page
+        app_state["lock"] = asyncio.Lock()
+        app_state["initialized"] = True
+        app_state["init_error"] = None
+    except Exception as e:
+        app_state["init_error"] = str(e)
+        print(f"[Error] Browser initialization failed: {e}")
+
+async def ensure_ready():
+    """Wait for background initialization to finish or attempt it now."""
+    if app_state["initialized"]:
+        return
+
+    # If already running initialization task in background, await it
+    task = app_state.get("init_task")
+    if task and not task.done():
+        await task
+
+    if not app_state["initialized"]:
+        await initialize_browser()
+
+    if not app_state["initialized"]:
+        err = app_state.get("init_error") or "Service not initialized."
+        raise HTTPException(status_code=503, detail=f"Claude service not ready: {err}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Try to initialize immediately on startup if cookies are present
-    try:
-        await initialize_browser()
-    except Exception as e:
-        print(f"Warning during startup initialization: {e}")
-        print("Service will start and wait for CLAUDE_COOKIES environment variable.")
+    # Launch browser initialization as a BACKGROUND task so FastAPI opens the port immediately!
+    app_state["init_task"] = asyncio.create_task(initialize_browser())
+    print("[Startup] FastAPI bound port immediately. Background browser initializing...")
 
     yield
 
-    if app_state["browser"]:
+    if app_state.get("browser"):
         print("Shutting down Chromium...")
         await app_state["browser"].close()
-    if app_state["playwright"]:
+    if app_state.get("playwright"):
         await app_state["playwright"].stop()
 
 app = FastAPI(
@@ -218,9 +233,9 @@ async def root():
     page = app_state.get("page")
     current_url = page.url if page else None
     return {
-        "status": "ready" if app_state["initialized"] else "waiting_for_configuration",
-        "init_error": app_state["init_error"],
+        "status": "ready" if app_state["initialized"] else "initializing",
         "service": "Claude.ai API",
+        "init_error": app_state["init_error"],
         "current_chat_url": current_url,
         "current_chat_id": extract_chat_id(current_url) if current_url else None,
         "endpoints": {
@@ -232,19 +247,7 @@ async def root():
 
 @app.get("/chat/status")
 async def chat_status():
-    if not app_state["initialized"]:
-        # Try initializing now in case env var was set
-        try:
-            await initialize_browser()
-        except Exception:
-            pass
-
-    if not app_state["initialized"]:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service not initialized: {app_state['init_error'] or 'Missing CLAUDE_COOKIES'}"
-        )
-
+    await ensure_ready()
     page = app_state.get("page")
     return {
         "current_url": page.url,
@@ -253,15 +256,7 @@ async def chat_status():
 
 @app.post("/chat")
 async def chat_continue(req: PromptRequest):
-    if not app_state["initialized"]:
-        try:
-            await initialize_browser()
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to initialize Claude session: {e}. Please ensure CLAUDE_COOKIES is set in Render Environment Variables."
-            )
-
+    await ensure_ready()
     page = app_state.get("page")
     lock = app_state.get("lock")
 
@@ -282,15 +277,7 @@ async def chat_continue(req: PromptRequest):
 
 @app.post("/chat/new")
 async def chat_new(req: NewChatRequest):
-    if not app_state["initialized"]:
-        try:
-            await initialize_browser()
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to initialize Claude session: {e}. Please ensure CLAUDE_COOKIES is set in Render Environment Variables."
-            )
-
+    await ensure_ready()
     page = app_state.get("page")
     lock = app_state.get("lock")
 
